@@ -1,0 +1,206 @@
+
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.3.0
+  creationTimestamp: null
+  name: routes.router.v8s.cedio.dev
+spec:
+  group: router.v8s.cedio.dev
+  names:
+    kind: Route
+    listKind: RouteList
+    plural: routes
+    singular: route
+  scope: Namespaced
+  subresources:
+    status: {}
+  validation:
+    openAPIV3Schema:
+      description: Route is the Schema for the routes API
+      properties:
+        apiVersion:
+          description: 'APIVersion defines the versioned schema of this representation
+            of an object. Servers should convert recognized schemas to the latest
+            internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+          type: string
+        kind:
+          description: 'Kind is a string value representing the REST resource this
+            object represents. Servers may infer this from the endpoint the client
+            submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+          type: string
+        metadata:
+          type: object
+        spec:
+          description: RouteSpec defines the desired state of Route
+          properties:
+            ingress:
+              description: If routeType="loadbalancer", configuration of loadbalancer
+                will be applied
+              properties:
+                backend:
+                  description: 'Mode of Voyager ingress backend Supported: tcp/http'
+                  type: string
+                host:
+                  description: Hostname of Ingress typed Route Automatically generated
+                    as <service-name>-<namespace-name>.<cluster-domain> if not supplied
+                  type: string
+                port:
+                  description: Port for http or tcp, optional for http
+                  type: integer
+                servicePort:
+                  anyOf:
+                  - type: integer
+                  - type: string
+                  description: The target port on pods selected by the service this
+                    route points to. If this is a string, it will be looked up as
+                    a named port in the target endpoints port list.
+                  x-kubernetes-int-or-string: true
+                tls:
+                  description: TLS configuration for Ingress
+                  properties:
+                    secretName:
+                      description: Name of Secret for SSL certificate used to perform
+                        TLS encryption
+                      type: string
+                  required:
+                  - secretName
+                  type: object
+              required:
+              - backend
+              - servicePort
+              type: object
+            loadbalancer:
+              description: If routeType="loadbalancer", configuration of loadbalancer
+                will be applied
+              properties:
+                addressPool:
+                  description: 'Loadbalancer IP Pool for Service Supported: internal/external'
+                  type: string
+                targetIP:
+                  description: Specific IP for metallb to assign to Service
+                  type: string
+              required:
+              - addressPool
+              type: object
+            serviceName:
+              description: Name of the Service which this route is backed
+              type: string
+            type:
+              description: 'Route type for the route to operate Supported: ingress/loadbalancer'
+              type: string
+          required:
+          - serviceName
+          - type
+          type: object
+        status:
+          description: RouteStatus defines the observed state of Route
+          properties:
+            ingress:
+              description: Ingress status of Route as list
+              items:
+                description: RouteIngress holds information about the places where
+                  a route is exposed as ingress
+                properties:
+                  conditions:
+                    description: Conditions is the state of the route, may be empty.
+                    items:
+                      description: 'RouteCondition contains details for the current
+                        condition of this route on a particular router ref: OpenShift
+                        API Route'
+                      properties:
+                        lastTransitionTime:
+                          description: RFC 3339 date and time when this condition
+                            last transitioned
+                          format: date-time
+                          type: string
+                        message:
+                          description: Human readable message indicating details about
+                            last transition.
+                          type: string
+                        reason:
+                          description: (brief) reason for the condition's last transition,
+                            and is usually a machine and human readable constant
+                          type: string
+                        status:
+                          description: Status is the status of the condition. Can
+                            be True, False, Unknown.
+                          type: string
+                        type:
+                          description: Type is the type of the condition. Currently
+                            only Ready.
+                          type: string
+                      required:
+                      - status
+                      - type
+                      type: object
+                    type: array
+                  host:
+                    description: Host is the host string under which the route is
+                      exposed; this value is required
+                    type: string
+                  port:
+                    description: Port for http or tcp, optional for http
+                    type: integer
+                type: object
+              type: array
+            loadbalancer:
+              description: Loadbalancer status of Route as list
+              items:
+                description: RouteLoadbalancer holds information about the places
+                  where a route is exposed as lb
+                properties:
+                  conditions:
+                    description: Conditions is the state of the route, may be empty.
+                    items:
+                      description: 'RouteCondition contains details for the current
+                        condition of this route on a particular router ref: OpenShift
+                        API Route'
+                      properties:
+                        lastTransitionTime:
+                          description: RFC 3339 date and time when this condition
+                            last transitioned
+                          format: date-time
+                          type: string
+                        message:
+                          description: Human readable message indicating details about
+                            last transition.
+                          type: string
+                        reason:
+                          description: (brief) reason for the condition's last transition,
+                            and is usually a machine and human readable constant
+                          type: string
+                        status:
+                          description: Status is the status of the condition. Can
+                            be True, False, Unknown.
+                          type: string
+                        type:
+                          description: Type is the type of the condition. Currently
+                            only Ready.
+                          type: string
+                      required:
+                      - status
+                      - type
+                      type: object
+                    type: array
+                  ip:
+                    description: IP is the location which the route is exposed as
+                      loadbalancer
+                    type: string
+                type: object
+              type: array
+          type: object
+      type: object
+  version: v1beta1
+  versions:
+  - name: v1beta1
+    served: true
+    storage: true
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

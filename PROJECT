@@ -1,0 +1,11 @@
+domain: v8s.cedio.dev
+layout: go.kubebuilder.io/v2
+projectName: v8s-router
+repo: v8s-router
+resources:
+- group: router
+  kind: Route
+  version: v1beta1
+version: 3-alpha
+plugins:
+  go.sdk.operatorframework.io/v2-alpha: {}
