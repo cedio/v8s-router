@@ -48,24 +48,27 @@ const (
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes/status,verbs=get;update;patch
 
-func (r *RouteReconciler) patchServiceLoadBalancer(ro *routerv1beta1.Route, service *corev1.Service) error {
+func (r *RouteReconciler) patchRouteService(ro *routerv1beta1.Route, service *corev1.Service) error {
 	annotations := map[string]string{
 		serviceLastManagedTimeField: time.Now().Format(time.RFC3339),
-		addressPoolAnnotationField:  string(ro.Spec.Loadbalancer.AddressPool),
 		serviceRouteTypeField:       string(ro.Spec.Type),
 	}
 	service.ObjectMeta.Annotations = annotations
+	return nil
+}
+
+func (r *RouteReconciler) patchServiceLoadBalancer(ro *routerv1beta1.Route, service *corev1.Service) error {
+	service.ObjectMeta.Annotations[addressPoolAnnotationField] = string(ro.Spec.Loadbalancer.AddressPool)
 	service.Spec.Type = corev1.ServiceTypeLoadBalancer
 	if ro.Spec.Loadbalancer.TargetIP != "" {
 		service.Spec.LoadBalancerIP = ro.Spec.Loadbalancer.TargetIP
 	}
-
 	return nil
 }
 
-func (r *RouteReconciler) manageService(ro *routerv1beta1.Route, reqLogger logr.Logger) (*ctrl.Result, error) {
+func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route, reqLogger logr.Logger) (*ctrl.Result, error) {
 	service := &corev1.Service{}
-	err := r.Get(context.TODO(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
+	err := r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
 	if err != nil {
 		reqLogger.Error(err, "Failed to get Route Service")
 		return &reconcile.Result{}, err
@@ -74,26 +77,32 @@ func (r *RouteReconciler) manageService(ro *routerv1beta1.Route, reqLogger logr.
 		reqLogger.Error(err, "Error getting spec.loadbalancer")
 		return &reconcile.Result{}, errors.NewBadRequest("Missing spec.loadbalancer for spec.type='loadbalancer'")
 	}
-	err = r.patchServiceLoadBalancer(ro, service)
+	err = r.patchRouteService(ro, service)
 	if err != nil {
-		reqLogger.Error(err, "error getting server service")
+		reqLogger.Error(err, "Error patching Route Service")
 		return &reconcile.Result{}, err
 	}
-	err = r.Update(context.TODO(), service)
+	err = r.patchServiceLoadBalancer(ro, service)
 	if err != nil {
-		reqLogger.Error(err, "Failed to patch Route Service", "Service.Namespace", service.Namespace, "Service.Name", service.Name)
+		reqLogger.Error(err, "Error patching Service to LoadBalancer")
+		return &reconcile.Result{}, err
+	}
+	err = r.Update(context.Background(), service)
+	if err != nil {
+		reqLogger.Error(err, "Failed to update Route Service", "Service.Namespace", service.Namespace, "Service.Name", service.Name)
 		return &reconcile.Result{}, err
 	}
 	return nil, nil
 }
 
+// Reconcile K8s API events
 func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
 	reqLogger := r.Log.WithValues("route", req.NamespacedName)
 
 	// Fetch instance
 	ro := &routerv1beta1.Route{}
-	err := r.Get(context.TODO(), req.NamespacedName, ro)
+	err := r.Get(context.Background(), req.NamespacedName, ro)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -107,10 +116,10 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	case routerv1beta1.RouteTypeLoadbalancer:
 		// Patch related Service to regarding type
-		reconcileResult, err := r.manageService(ro, reqLogger)
+		reconcileResult, err := r.routeLoadBalancer(ro, reqLogger)
 		if err != nil {
 			ro.Status.Loadbalancer = nil
-			if err := r.Status().Update(context.TODO(), ro); err != nil {
+			if err := r.Status().Update(context.Background(), ro); err != nil {
 				reqLogger.Error(err, "Failed to update Route Status")
 			}
 			return *reconcileResult, err
@@ -125,6 +134,7 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
+// SetupWithManager setups controller
 func (r *RouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&routerv1beta1.Route{}).
