@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,15 +49,39 @@ const (
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes/status,verbs=get;update;patch
 
+// hasConditionsDenied returns true if status.conditions contains 'Denied'
+func (r *RouteReconciler) hasConditionsDenied(ro *routerv1beta1.Route) bool {
+	// Check status.conditions do not contain denied
+	for _, co := range ro.Status.Conditions {
+		if co.Type == routerv1beta1.RouteDenied {
+			return true
+		}
+	}
+	return false
+}
+
+// appendStatusDenied appends a status.conditions[].type==Denied with message
+func (r *RouteReconciler) appendStatusDenied(ro *routerv1beta1.Route, message string) error {
+	ro.Status.Conditions = append(ro.Status.Conditions, routerv1beta1.RouteCondition{
+		Type:               routerv1beta1.RouteDenied,
+		Status:             corev1.ConditionFalse,
+		Message:            message,
+		LastTransitionTime: &metav1.Time{Time: time.Now()},
+	})
+	return nil
+}
+
+// patchRouteService updates Route related Service with timestamp as touched
 func (r *RouteReconciler) patchRouteService(ro *routerv1beta1.Route, service *corev1.Service) error {
 	annotations := map[string]string{
-		serviceLastManagedTimeField: time.Now().Format(time.RFC3339),
+		serviceLastManagedTimeField: time.Now().UTC().Format(time.RFC3339),
 		serviceRouteTypeField:       string(ro.Spec.Type),
 	}
 	service.ObjectMeta.Annotations = annotations
 	return nil
 }
 
+// patchServiceLoadBalancer patch Service to Loadbalancer type
 func (r *RouteReconciler) patchServiceLoadBalancer(ro *routerv1beta1.Route, service *corev1.Service) error {
 	service.ObjectMeta.Annotations[addressPoolAnnotationField] = string(ro.Spec.Loadbalancer.AddressPool)
 	service.Spec.Type = corev1.ServiceTypeLoadBalancer
@@ -66,30 +91,30 @@ func (r *RouteReconciler) patchServiceLoadBalancer(ro *routerv1beta1.Route, serv
 	return nil
 }
 
-func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route, reqLogger logr.Logger) (*ctrl.Result, error) {
+// routeLoadBalancer acts as higher order wrapper for positive provisioning loadbalancer typed Route
+func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route) (*ctrl.Result, error) {
 	service := &corev1.Service{}
 	err := r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
 	if err != nil {
-		reqLogger.Error(err, "Failed to get Route Service")
+		r.appendStatusDenied(ro, "Failed getting Service named in spec.serviceName")
 		return &reconcile.Result{}, err
 	}
 	if ro.Spec.Loadbalancer == nil {
-		reqLogger.Error(err, "Error getting spec.loadbalancer")
-		return &reconcile.Result{}, errors.NewBadRequest("Missing spec.loadbalancer for spec.type='loadbalancer'")
+		r.appendStatusDenied(ro, "Missing spec.loadbalancer for spec.type='loadbalancer'")
+		return &reconcile.Result{}, errors.NewBadRequest("missing spec.type='loadbalancer'")
 	}
 	err = r.patchRouteService(ro, service)
 	if err != nil {
-		reqLogger.Error(err, "Error patching Route Service")
+		r.appendStatusDenied(ro, "Failed touching Route Service")
 		return &reconcile.Result{}, err
 	}
 	err = r.patchServiceLoadBalancer(ro, service)
 	if err != nil {
-		reqLogger.Error(err, "Error patching Service to LoadBalancer")
+		r.appendStatusDenied(ro, "Failed patching Service to Loadbalancer")
 		return &reconcile.Result{}, err
 	}
 	err = r.Update(context.Background(), service)
 	if err != nil {
-		reqLogger.Error(err, "Failed to update Route Service", "Service.Namespace", service.Namespace, "Service.Name", service.Name)
 		return &reconcile.Result{}, err
 	}
 	return nil, nil
@@ -98,7 +123,7 @@ func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route, reqLogger l
 // Reconcile K8s API events
 func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	_ = context.Background()
-	reqLogger := r.Log.WithValues("route", req.NamespacedName)
+	_ = r.Log.WithValues("route", req.NamespacedName)
 
 	// Fetch instance
 	ro := &routerv1beta1.Route{}
@@ -110,26 +135,57 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
+	// Reset Route Status
+	ro.Status = routerv1beta1.RouteStatus{
+		Conditions: []routerv1beta1.RouteCondition{},
+	}
+
 	// Determine Spec.Type
 	switch ro.Spec.Type {
 	case routerv1beta1.RouteTypeIngress:
+		{
 
+		}
 	case routerv1beta1.RouteTypeLoadbalancer:
-		// Patch related Service to regarding type
-		reconcileResult, err := r.routeLoadBalancer(ro, reqLogger)
-		if err != nil {
-			ro.Status.Loadbalancer = nil
-			if err := r.Status().Update(context.Background(), ro); err != nil {
-				reqLogger.Error(err, "Failed to update Route Status")
+		{
+			// Patch related Service to regarding type
+			reconcileResult, err := r.routeLoadBalancer(ro)
+			if err != nil {
+				r.appendStatusDenied(ro, "Failed in updating Service as Loadbalancer")
+			} else if err == nil && reconcileResult != nil {
+				// In case requeue required
+				return *reconcileResult, nil
 			}
-			return *reconcileResult, err
-		} else if err == nil && reconcileResult != nil {
-			// In case requeue required
-			return *reconcileResult, nil
+			/*
+			 * TODO:
+			 *	1) Change Reconcile() status.loadbalancer update to Watch() update
+			 */
+			// if !r.hasConditionsDenied(ro) {
+			// 	service := &corev1.Service{}
+			// 	// Ignore error as routeLoadBalancer() successfully
+			// 	_ = r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
+			// 	// Set status.loadbalancer
+			// 	ro.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
+			// 		IP: service.Status.LoadBalancer.Ingress[0].IP,
+			// 	}}
+			// }
 		}
 	default:
-		return ctrl.Result{}, errors.NewBadRequest("Supported spec.type: ['ingress', 'loadbalancer']")
+		{
+			r.appendStatusDenied(ro, "Supported spec.type: ['ingress', 'loadbalancer']")
+		}
 	}
+
+	if !r.hasConditionsDenied(ro) {
+		// Baseline status.conditions
+		ro.Status.Conditions = append(ro.Status.Conditions, routerv1beta1.RouteCondition{
+			Type:               routerv1beta1.RouteAdmitted,
+			Status:             corev1.ConditionTrue,
+			Message:            "",
+			LastTransitionTime: &metav1.Time{Time: time.Now()},
+		})
+	}
+	_ = r.Status().Update(context.Background(), ro)
 
 	return ctrl.Result{}, nil
 }

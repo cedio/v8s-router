@@ -119,6 +119,9 @@ type RouteStatus struct {
 
 	// Loadbalancer status of Route as list
 	Loadbalancer []RouteLoadbalancer `json:"loadbalancer,omitempty" protobuf:"bytes,2,rep,name=loadbalancer"`
+
+	// Conditions is the state of the route, may be empty.
+	Conditions []RouteCondition `json:"conditions,omitempty" protobuf:"bytes,3,rep,name=conditions"`
 }
 
 // RouteIngress holds information about the places where a route is exposed as ingress
@@ -129,36 +132,26 @@ type RouteIngress struct {
 	// Port for http or tcp, optional for http
 	// +optional
 	Port *int `json:"port,omitempty" protobuf:"varint,2,opt,name=port"`
-
-	// Conditions is the state of the route, may be empty.
-	Conditions []RouteCondition `json:"conditions,omitempty" protobuf:"bytes,3,rep,name=conditions"`
 }
 
 // RouteLoadbalancer holds information about the places where a route is exposed as lb
 type RouteLoadbalancer struct {
 	// IP is the location which the route is exposed as loadbalancer
 	IP string `json:"ip,omitempty" protobuf:"bytes,1,opt,name=ip"`
-
-	// Conditions is the state of the route, may be empty.
-	Conditions []RouteCondition `json:"conditions,omitempty" protobuf:"bytes,2,rep,name=conditions"`
 }
 
 // RouteCondition contains details for the current condition of this route on a particular router
 // ref: OpenShift API Route
 type RouteCondition struct {
 	// Type is the type of the condition.
-	// Currently only Ready.
 	Type RouteConditionType `json:"type" protobuf:"bytes,1,opt,name=type,casttype=RouteConditionType"`
 	// Status is the status of the condition.
 	// Can be True, False, Unknown.
 	Status corev1.ConditionStatus `json:"status" protobuf:"bytes,2,opt,name=status,casttype=k8s.io/api/core/v1.ConditionStatus"`
-	// (brief) reason for the condition's last transition, and is usually a machine and human
-	// readable constant
-	Reason string `json:"reason,omitempty" protobuf:"bytes,3,opt,name=reason"`
 	// Human readable message indicating details about last transition.
-	Message string `json:"message,omitempty" protobuf:"bytes,4,opt,name=message"`
+	Message string `json:"message,omitempty" protobuf:"bytes,3,opt,name=message"`
 	// RFC 3339 date and time when this condition last transitioned
-	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty" protobuf:"bytes,5,opt,name=lastTransitionTime"`
+	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty" protobuf:"bytes,4,opt,name=lastTransitionTime"`
 }
 
 // RouteConditionType is a valid value for RouteCondition
@@ -168,6 +161,9 @@ type RouteConditionType string
 const (
 	// RouteAdmitted means the route is able to service requests for the provided Host
 	RouteAdmitted RouteConditionType = "Admitted"
+
+	// RouteDenied means the route is not completed
+	RouteDenied RouteConditionType = "Denied"
 )
 
 // +kubebuilder:object:root=true

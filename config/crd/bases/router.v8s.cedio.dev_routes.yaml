@@ -98,45 +98,38 @@ spec:
         status:
           description: RouteStatus defines the observed state of Route
           properties:
+            conditions:
+              description: Conditions is the state of the route, may be empty.
+              items:
+                description: 'RouteCondition contains details for the current condition
+                  of this route on a particular router ref: OpenShift API Route'
+                properties:
+                  lastTransitionTime:
+                    description: RFC 3339 date and time when this condition last transitioned
+                    format: date-time
+                    type: string
+                  message:
+                    description: Human readable message indicating details about last
+                      transition.
+                    type: string
+                  status:
+                    description: Status is the status of the condition. Can be True,
+                      False, Unknown.
+                    type: string
+                  type:
+                    description: Type is the type of the condition.
+                    type: string
+                required:
+                - status
+                - type
+                type: object
+              type: array
             ingress:
               description: Ingress status of Route as list
               items:
                 description: RouteIngress holds information about the places where
                   a route is exposed as ingress
                 properties:
-                  conditions:
-                    description: Conditions is the state of the route, may be empty.
-                    items:
-                      description: 'RouteCondition contains details for the current
-                        condition of this route on a particular router ref: OpenShift
-                        API Route'
-                      properties:
-                        lastTransitionTime:
-                          description: RFC 3339 date and time when this condition
-                            last transitioned
-                          format: date-time
-                          type: string
-                        message:
-                          description: Human readable message indicating details about
-                            last transition.
-                          type: string
-                        reason:
-                          description: (brief) reason for the condition's last transition,
-                            and is usually a machine and human readable constant
-                          type: string
-                        status:
-                          description: Status is the status of the condition. Can
-                            be True, False, Unknown.
-                          type: string
-                        type:
-                          description: Type is the type of the condition. Currently
-                            only Ready.
-                          type: string
-                      required:
-                      - status
-                      - type
-                      type: object
-                    type: array
                   host:
                     description: Host is the host string under which the route is
                       exposed; this value is required
@@ -152,39 +145,6 @@ spec:
                 description: RouteLoadbalancer holds information about the places
                   where a route is exposed as lb
                 properties:
-                  conditions:
-                    description: Conditions is the state of the route, may be empty.
-                    items:
-                      description: 'RouteCondition contains details for the current
-                        condition of this route on a particular router ref: OpenShift
-                        API Route'
-                      properties:
-                        lastTransitionTime:
-                          description: RFC 3339 date and time when this condition
-                            last transitioned
-                          format: date-time
-                          type: string
-                        message:
-                          description: Human readable message indicating details about
-                            last transition.
-                          type: string
-                        reason:
-                          description: (brief) reason for the condition's last transition,
-                            and is usually a machine and human readable constant
-                          type: string
-                        status:
-                          description: Status is the status of the condition. Can
-                            be True, False, Unknown.
-                          type: string
-                        type:
-                          description: Type is the type of the condition. Currently
-                            only Ready.
-                          type: string
-                      required:
-                      - status
-                      - type
-                      type: object
-                    type: array
                   ip:
                     description: IP is the location which the route is exposed as
                       loadbalancer
