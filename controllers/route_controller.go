@@ -28,7 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	routerv1beta1 "v8s-router/api/v1beta1"
 )
@@ -43,7 +45,7 @@ type RouteReconciler struct {
 const (
 	addressPoolAnnotationField  = "metallb.universe.tf/address-pool"
 	serviceLastManagedTimeField = "router.v8s.cedio.dev/last-managed-time"
-	serviceRouteTypeField       = "router.v8s.cedio.dev/type"
+	serviceManagedByField       = "router.v8s.cedio.dev/managed-by"
 )
 
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -75,7 +77,10 @@ func (r *RouteReconciler) appendStatusDenied(ro *routerv1beta1.Route, message st
 func (r *RouteReconciler) patchRouteService(ro *routerv1beta1.Route, service *corev1.Service) error {
 	annotations := map[string]string{
 		serviceLastManagedTimeField: time.Now().UTC().Format(time.RFC3339),
-		serviceRouteTypeField:       string(ro.Spec.Type),
+		serviceManagedByField:       ro.Name,
+	}
+	for k, v := range service.ObjectMeta.Annotations {
+		annotations[k] = v
 	}
 	service.ObjectMeta.Annotations = annotations
 	return nil
@@ -110,7 +115,7 @@ func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route) (*ctrl.Resu
 	}
 	err = r.patchServiceLoadBalancer(ro, service)
 	if err != nil {
-		r.appendStatusDenied(ro, "Failed patching Service to Loadbalancer")
+		r.appendStatusDenied(ro, "Failed patching Service from/to Loadbalancer")
 		return &reconcile.Result{}, err
 	}
 	err = r.Update(context.Background(), service)
@@ -120,20 +125,47 @@ func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route) (*ctrl.Resu
 	return nil, nil
 }
 
+func (r *RouteReconciler) getRouteFromService(req ctrl.Request, ro *routerv1beta1.Route) bool {
+	// Fetch Service instance
+	service := &corev1.Service{}
+	err := r.Get(context.Background(), req.NamespacedName, service)
+	if err != nil {
+		return false
+	}
+	if _, ok := service.Annotations[serviceManagedByField]; !ok {
+		return false
+	}
+	err = r.Get(
+		context.Background(),
+		types.NamespacedName{
+			Name:      service.Annotations[serviceManagedByField],
+			Namespace: req.Namespace,
+		},
+		ro,
+	)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
 // Reconcile K8s API events
 func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("route", req.NamespacedName)
+	reqLogger := r.Log.WithValues("route", req.NamespacedName)
 
-	// Fetch instance
+	// Fetch Route instance
 	ro := &routerv1beta1.Route{}
 	err := r.Get(context.Background(), req.NamespacedName, ro)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			if !r.getRouteFromService(req, ro) {
+				return ctrl.Result{}, nil
+			}
+		} else {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, err
 	}
+	reqLogger.Info("Accepted")
 
 	// Reset Route Status
 	ro.Status = routerv1beta1.RouteStatus{
@@ -156,19 +188,17 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 				// In case requeue required
 				return *reconcileResult, nil
 			}
-			/*
-			 * TODO:
-			 *	1) Change Reconcile() status.loadbalancer update to Watch() update
-			 */
-			// if !r.hasConditionsDenied(ro) {
-			// 	service := &corev1.Service{}
-			// 	// Ignore error as routeLoadBalancer() successfully
-			// 	_ = r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
-			// 	// Set status.loadbalancer
-			// 	ro.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
-			// 		IP: service.Status.LoadBalancer.Ingress[0].IP,
-			// 	}}
-			// }
+			if !r.hasConditionsDenied(ro) {
+				service := &corev1.Service{}
+				// Ignore error as routeLoadBalancer() successfully
+				_ = r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
+				if len(service.Status.LoadBalancer.Ingress) > 0 {
+					// Set status.loadbalancer
+					ro.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
+						IP: service.Status.LoadBalancer.Ingress[0].IP,
+					}}
+				}
+			}
 		}
 	default:
 		{
@@ -194,5 +224,7 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 func (r *RouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&routerv1beta1.Route{}).
+		// Add extra watch to all Services for CRUD callback
+		Watches(&source.Kind{Type: &corev1.Service{}}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }
