@@ -29,7 +29,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	routerv1beta1 "v8s-router/api/v1beta1"
@@ -46,6 +45,7 @@ const (
 	addressPoolAnnotationField  = "metallb.universe.tf/address-pool"
 	serviceLastManagedTimeField = "router.v8s.cedio.dev/last-managed-time"
 	serviceManagedByField       = "router.v8s.cedio.dev/managed-by"
+	routeFinalizer              = "finalizer.router.v8s.cedio.dev"
 )
 
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -96,35 +96,7 @@ func (r *RouteReconciler) patchServiceLoadBalancer(ro *routerv1beta1.Route, serv
 	return nil
 }
 
-// routeLoadBalancer acts as higher order wrapper for positive provisioning loadbalancer typed Route
-func (r *RouteReconciler) routeLoadBalancer(ro *routerv1beta1.Route) (*ctrl.Result, error) {
-	service := &corev1.Service{}
-	err := r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
-	if err != nil {
-		r.appendStatusDenied(ro, "Failed getting Service named in spec.serviceName")
-		return &reconcile.Result{}, err
-	}
-	if ro.Spec.Loadbalancer == nil {
-		r.appendStatusDenied(ro, "Missing spec.loadbalancer for spec.type='loadbalancer'")
-		return &reconcile.Result{}, errors.NewBadRequest("missing spec.type='loadbalancer'")
-	}
-	err = r.patchRouteService(ro, service)
-	if err != nil {
-		r.appendStatusDenied(ro, "Failed touching Route Service")
-		return &reconcile.Result{}, err
-	}
-	err = r.patchServiceLoadBalancer(ro, service)
-	if err != nil {
-		r.appendStatusDenied(ro, "Failed patching Service from/to Loadbalancer")
-		return &reconcile.Result{}, err
-	}
-	err = r.Update(context.Background(), service)
-	if err != nil {
-		return &reconcile.Result{}, err
-	}
-	return nil, nil
-}
-
+// getRouteFromService tries to resolve Route from serviceManagedByField in service
 func (r *RouteReconciler) getRouteFromService(req ctrl.Request, ro *routerv1beta1.Route) bool {
 	// Fetch Service instance
 	service := &corev1.Service{}
@@ -149,16 +121,89 @@ func (r *RouteReconciler) getRouteFromService(req ctrl.Request, ro *routerv1beta
 	return true
 }
 
+func (r *RouteReconciler) loadbalancerClass(state State, _route interface{}) error {
+	route, _ := _route.(*routerv1beta1.Route)
+
+	service := corev1.Service{}
+	err := r.Get(context.Background(), types.NamespacedName{Name: route.Spec.ServiceName, Namespace: route.Namespace}, &service)
+	if err != nil {
+		return NewProflowRuntimeError("Failed getting Service named in spec.serviceName")
+	}
+	if route.Spec.Loadbalancer == nil {
+		return NewProflowRuntimeError("Missing spec.loadbalancer for spec.type='loadbalancer'")
+	}
+	err = state(_route, &service)
+	if err != nil {
+		return NewProflowRuntimeError("Error occurs in changing state of API objects")
+	}
+	err = r.Update(context.Background(), &service)
+	if err != nil {
+		return NewProflowRuntimeError("Failed updating Service")
+	}
+	return nil
+}
+
+func (r *RouteReconciler) routeFinalizeCondition(proflow *Proflow, _route interface{}) error {
+	route, _ := _route.(*routerv1beta1.Route)
+
+	if route.GetDeletionTimestamp() != nil {
+		if contains(route.GetFinalizers(), routeFinalizer) {
+			// Run finalization logic. If the
+			// finalization logic fails, don't remove the finalizer so
+			// that we can retry during the next reconciliation.
+			if err := proflow.ApplyClass("absent", _route); err != nil {
+				return err
+			}
+			// Remove finalizer. Once all finalizers have been
+			// removed, the object will be deleted.
+			route.SetFinalizers(remove(route.GetFinalizers(), routeFinalizer))
+		}
+	} else {
+		// Add finalizer for this CR
+		if !contains(route.GetFinalizers(), routeFinalizer) {
+			route.SetFinalizers(append(route.GetFinalizers(), routeFinalizer))
+		}
+		if err := proflow.ApplyClass("present", _route); err != nil {
+			return err
+		}
+		service := &corev1.Service{}
+		_ = r.Get(context.Background(), types.NamespacedName{Name: route.Spec.ServiceName, Namespace: route.Namespace}, service)
+		if len(service.Status.LoadBalancer.Ingress) > 0 {
+			// Set status.loadbalancer
+			route.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
+				IP: service.Status.LoadBalancer.Ingress[0].IP,
+			}}
+		}
+	}
+	return nil
+}
+
+func (r *RouteReconciler) loadbalancerPresent(apis ...interface{}) error {
+	route, _ := apis[0].(*routerv1beta1.Route)
+	service, _ := apis[1].(*corev1.Service)
+
+	err := r.patchRouteService(route, service)
+	if err != nil {
+		return NewProflowRuntimeError("Failed updating metadata of Service")
+	}
+	err = r.patchServiceLoadBalancer(route, service)
+	if err != nil {
+		return NewProflowRuntimeError("Failed patching Service for type loadbalancer")
+	}
+
+	return nil
+}
+
 // Reconcile K8s API events
 func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	reqLogger := r.Log.WithValues("route", req.NamespacedName)
 
 	// Fetch Route instance
-	ro := &routerv1beta1.Route{}
-	err := r.Get(context.Background(), req.NamespacedName, ro)
+	route := routerv1beta1.Route{}
+	err := r.Get(context.Background(), req.NamespacedName, &route)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			if !r.getRouteFromService(req, ro) {
+			if !r.getRouteFromService(req, &route) {
 				return ctrl.Result{}, nil
 			}
 		} else {
@@ -168,54 +213,48 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	reqLogger.Info("Accepted")
 
 	// Reset Route Status
-	ro.Status = routerv1beta1.RouteStatus{
+	route.Status = routerv1beta1.RouteStatus{
 		Conditions: []routerv1beta1.RouteCondition{},
 	}
+	err = nil
 
 	// Determine Spec.Type
-	switch ro.Spec.Type {
+	switch route.Spec.Type {
 	case routerv1beta1.RouteTypeIngress:
 		{
 
 		}
 	case routerv1beta1.RouteTypeLoadbalancer:
 		{
-			// Patch related Service to regarding type
-			reconcileResult, err := r.routeLoadBalancer(ro)
-			if err != nil {
-				r.appendStatusDenied(ro, "Failed in updating Service as Loadbalancer")
-			} else if err == nil && reconcileResult != nil {
-				// In case requeue required
-				return *reconcileResult, nil
-			}
-			if !r.hasConditionsDenied(ro) {
-				service := &corev1.Service{}
-				// Ignore error as routeLoadBalancer() successfully
-				_ = r.Get(context.Background(), types.NamespacedName{Name: ro.Spec.ServiceName, Namespace: ro.Namespace}, service)
-				if len(service.Status.LoadBalancer.Ingress) > 0 {
-					// Set status.loadbalancer
-					ro.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
-						IP: service.Status.LoadBalancer.Ingress[0].IP,
-					}}
-				}
-			}
+			err = new(Proflow).
+				InitClass(r.loadbalancerClass).
+				InitCondition(r.routeFinalizeCondition).
+				SetState("present", r.loadbalancerPresent).
+				// TODO
+				// SetState("absent", nil).
+				Apply(&route)
 		}
 	default:
 		{
-			r.appendStatusDenied(ro, "Supported spec.type: ['ingress', 'loadbalancer']")
+			err = NewProflowRuntimeError("Supported spec.type: ['ingress', 'loadbalancer']")
 		}
 	}
 
-	if !r.hasConditionsDenied(ro) {
+	// If Proflow returns Error
+	if err != nil {
+		r.appendStatusDenied(&route, err.Error())
+	}
+
+	if !r.hasConditionsDenied(&route) {
 		// Baseline status.conditions
-		ro.Status.Conditions = append(ro.Status.Conditions, routerv1beta1.RouteCondition{
+		route.Status.Conditions = append(route.Status.Conditions, routerv1beta1.RouteCondition{
 			Type:               routerv1beta1.RouteAdmitted,
 			Status:             corev1.ConditionTrue,
 			Message:            "",
 			LastTransitionTime: &metav1.Time{Time: time.Now()},
 		})
 	}
-	_ = r.Status().Update(context.Background(), ro)
+	_ = r.Status().Update(context.Background(), &route)
 
 	return ctrl.Result{}, nil
 }
