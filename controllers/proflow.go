@@ -24,11 +24,13 @@ import (
 type (
 	State     = func(...interface{}) error
 	States    = map[string]State
-	Condition = func(*Proflow, interface{}) error
-	Class     = func(State, interface{}) error
+	Condition = func(*Proflow, ...interface{}) error
+	Class     = func(State, ...interface{}) error
 )
 
 type Proflow struct {
+	Name      string
+	apis      []interface{}
 	states    States
 	condition Condition
 	class     Class
@@ -44,6 +46,10 @@ func (p *Proflow) InitCondition(condition Condition) *Proflow {
 	return p
 }
 
+func (p *Proflow) Init(class Class, condition Condition) *Proflow {
+	return p.InitClass(class).InitCondition(condition)
+}
+
 func (p *Proflow) SetState(name string, state State) *Proflow {
 	// Initialize states
 	if p.states == nil {
@@ -53,18 +59,23 @@ func (p *Proflow) SetState(name string, state State) *Proflow {
 	return p
 }
 
-func (p *Proflow) ApplyClass(stateName string, apiAddress interface{}) error {
+func (p *Proflow) SetAPI(apis ...interface{}) *Proflow {
+	p.apis = apis
+	return p
+}
+
+func (p *Proflow) ApplyClass(stateName string) error {
 	if state, ok := p.states[stateName]; ok {
 		if p.class != nil {
-			return p.class(state, apiAddress)
+			return p.class(state, p.apis...)
 		}
 		return newProflowError("Class not initialized")
 	}
 	return newProflowError("State not found in proflow.states")
 }
 
-func (p *Proflow) Apply(apiAddress interface{}) error {
-	return p.condition(p, apiAddress)
+func (p *Proflow) Apply() error {
+	return p.condition(p, p.apis...)
 }
 
 func newProflowError(message string) error {

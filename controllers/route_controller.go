@@ -52,9 +52,9 @@ const (
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes/status,verbs=get;update;patch
 
 // hasConditionsDenied returns true if status.conditions contains 'Denied'
-func (r *RouteReconciler) hasConditionsDenied(ro *routerv1beta1.Route) bool {
+func (r *RouteReconciler) hasConditionsDenied(routePtr *routerv1beta1.Route) bool {
 	// Check status.conditions do not contain denied
-	for _, co := range ro.Status.Conditions {
+	for _, co := range routePtr.Status.Conditions {
 		if co.Type == routerv1beta1.RouteDenied {
 			return true
 		}
@@ -63,8 +63,8 @@ func (r *RouteReconciler) hasConditionsDenied(ro *routerv1beta1.Route) bool {
 }
 
 // appendStatusDenied appends a status.conditions[].type==Denied with message
-func (r *RouteReconciler) appendStatusDenied(ro *routerv1beta1.Route, message string) error {
-	ro.Status.Conditions = append(ro.Status.Conditions, routerv1beta1.RouteCondition{
+func (r *RouteReconciler) appendStatusDenied(routePtr *routerv1beta1.Route, message string) error {
+	routePtr.Status.Conditions = append(routePtr.Status.Conditions, routerv1beta1.RouteCondition{
 		Type:               routerv1beta1.RouteDenied,
 		Status:             corev1.ConditionFalse,
 		Message:            message,
@@ -74,46 +74,62 @@ func (r *RouteReconciler) appendStatusDenied(ro *routerv1beta1.Route, message st
 }
 
 // patchRouteService updates Route related Service with timestamp as touched
-func (r *RouteReconciler) patchRouteService(ro *routerv1beta1.Route, service *corev1.Service) error {
+func (r *RouteReconciler) patchRouteService(routePtr *routerv1beta1.Route, servicePtr *corev1.Service) error {
 	annotations := map[string]string{
 		serviceLastManagedTimeField: time.Now().UTC().Format(time.RFC3339),
-		serviceManagedByField:       ro.Name,
+		serviceManagedByField:       routePtr.Name,
 	}
-	for k, v := range service.ObjectMeta.Annotations {
+	for k, v := range servicePtr.ObjectMeta.Annotations {
 		annotations[k] = v
 	}
-	service.ObjectMeta.Annotations = annotations
+	servicePtr.ObjectMeta.Annotations = annotations
+	return nil
+}
+
+func (r *RouteReconciler) revokeRouteService(routePtr *routerv1beta1.Route, servicePtr *corev1.Service) error {
+	delete(servicePtr.ObjectMeta.Annotations, serviceLastManagedTimeField)
+	delete(servicePtr.ObjectMeta.Annotations, serviceManagedByField)
+
 	return nil
 }
 
 // patchServiceLoadBalancer patch Service to Loadbalancer type
-func (r *RouteReconciler) patchServiceLoadBalancer(ro *routerv1beta1.Route, service *corev1.Service) error {
-	service.ObjectMeta.Annotations[addressPoolAnnotationField] = string(ro.Spec.Loadbalancer.AddressPool)
-	service.Spec.Type = corev1.ServiceTypeLoadBalancer
-	if ro.Spec.Loadbalancer.TargetIP != "" {
-		service.Spec.LoadBalancerIP = ro.Spec.Loadbalancer.TargetIP
+func (r *RouteReconciler) patchServiceLoadBalancer(routePtr *routerv1beta1.Route, servicePtr *corev1.Service) error {
+	servicePtr.ObjectMeta.Annotations[addressPoolAnnotationField] = string(routePtr.Spec.Loadbalancer.AddressPool)
+	servicePtr.Spec.Type = corev1.ServiceTypeLoadBalancer
+	if routePtr.Spec.Loadbalancer.TargetIP != "" {
+		servicePtr.Spec.LoadBalancerIP = routePtr.Spec.Loadbalancer.TargetIP
 	}
 	return nil
 }
 
+func (r *RouteReconciler) revokeServiceLoadbalancer(routePtr *routerv1beta1.Route, servicePtr *corev1.Service) error {
+	delete(servicePtr.ObjectMeta.Annotations, addressPoolAnnotationField)
+	servicePtr.Spec.Type = corev1.ServiceTypeClusterIP
+	servicePtr.Spec.Ports[0].NodePort = 0
+	servicePtr.Spec.LoadBalancerIP = ""
+
+	return nil
+}
+
 // getRouteFromService tries to resolve Route from serviceManagedByField in service
-func (r *RouteReconciler) getRouteFromService(req ctrl.Request, ro *routerv1beta1.Route) bool {
+func (r *RouteReconciler) getRouteFromService(req ctrl.Request, routePtr *routerv1beta1.Route) bool {
 	// Fetch Service instance
-	service := &corev1.Service{}
-	err := r.Get(context.Background(), req.NamespacedName, service)
+	servicePtr := &corev1.Service{}
+	err := r.Get(context.Background(), req.NamespacedName, servicePtr)
 	if err != nil {
 		return false
 	}
-	if _, ok := service.Annotations[serviceManagedByField]; !ok {
+	if _, ok := servicePtr.Annotations[serviceManagedByField]; !ok {
 		return false
 	}
 	err = r.Get(
 		context.Background(),
 		types.NamespacedName{
-			Name:      service.Annotations[serviceManagedByField],
+			Name:      servicePtr.Annotations[serviceManagedByField],
 			Namespace: req.Namespace,
 		},
-		ro,
+		routePtr,
 	)
 	if err != nil {
 		return false
@@ -121,18 +137,58 @@ func (r *RouteReconciler) getRouteFromService(req ctrl.Request, ro *routerv1beta
 	return true
 }
 
-func (r *RouteReconciler) loadbalancerClass(state State, _route interface{}) error {
-	route, _ := _route.(*routerv1beta1.Route)
+func (r *RouteReconciler) routeFinalizeCondition(proflow *Proflow, apis ...interface{}) error {
+	routePtr, _ := apis[0].(*routerv1beta1.Route)
+
+	if routePtr.GetDeletionTimestamp() != nil {
+		if contains(routePtr.GetFinalizers(), routeFinalizer) {
+			// Run finalization logic. If the
+			// finalization logic fails, don't remove the finalizer so
+			// that we can retry during the next reconciliation.
+			if err := proflow.ApplyClass("absent"); err != nil {
+				return err
+			}
+			// Remove finalizer. Once all finalizers have been
+			// removed, the object will be deleted.
+			routePtr.SetFinalizers(remove(routePtr.GetFinalizers(), routeFinalizer))
+		}
+	} else {
+		// Add finalizer for this CR
+		if !contains(routePtr.GetFinalizers(), routeFinalizer) {
+			routePtr.SetFinalizers(append(routePtr.GetFinalizers(), routeFinalizer))
+		}
+		if err := proflow.ApplyClass("present"); err != nil {
+			return err
+		}
+		service := &corev1.Service{}
+		_ = r.Get(context.Background(), types.NamespacedName{Name: routePtr.Spec.ServiceName, Namespace: routePtr.Namespace}, service)
+		if len(service.Status.LoadBalancer.Ingress) > 0 {
+			// Set status.loadbalancer
+			routePtr.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
+				IP: service.Status.LoadBalancer.Ingress[0].IP,
+			}}
+		}
+	}
+	return nil
+}
+
+func (r *RouteReconciler) ingressClass(state State, apis ...interface{}) error {
+	//routePtr, _ := apis[0].(*routerv1beta1.Route)
+	return nil
+}
+
+func (r *RouteReconciler) loadbalancerClass(state State, apis ...interface{}) error {
+	routePtr, _ := apis[0].(*routerv1beta1.Route)
 
 	service := corev1.Service{}
-	err := r.Get(context.Background(), types.NamespacedName{Name: route.Spec.ServiceName, Namespace: route.Namespace}, &service)
+	err := r.Get(context.Background(), types.NamespacedName{Name: routePtr.Spec.ServiceName, Namespace: routePtr.Namespace}, &service)
 	if err != nil {
 		return NewProflowRuntimeError("Failed getting Service named in spec.serviceName")
 	}
-	if route.Spec.Loadbalancer == nil {
+	if routePtr.Spec.Loadbalancer == nil {
 		return NewProflowRuntimeError("Missing spec.loadbalancer for spec.type='loadbalancer'")
 	}
-	err = state(_route, &service)
+	err = state(routePtr, &service)
 	if err != nil {
 		return NewProflowRuntimeError("Error occurs in changing state of API objects")
 	}
@@ -143,52 +199,33 @@ func (r *RouteReconciler) loadbalancerClass(state State, _route interface{}) err
 	return nil
 }
 
-func (r *RouteReconciler) routeFinalizeCondition(proflow *Proflow, _route interface{}) error {
-	route, _ := _route.(*routerv1beta1.Route)
+func (r *RouteReconciler) loadbalancerPresent(apis ...interface{}) error {
+	routePtr, _ := apis[0].(*routerv1beta1.Route)
+	servicePtr, _ := apis[1].(*corev1.Service)
 
-	if route.GetDeletionTimestamp() != nil {
-		if contains(route.GetFinalizers(), routeFinalizer) {
-			// Run finalization logic. If the
-			// finalization logic fails, don't remove the finalizer so
-			// that we can retry during the next reconciliation.
-			if err := proflow.ApplyClass("absent", _route); err != nil {
-				return err
-			}
-			// Remove finalizer. Once all finalizers have been
-			// removed, the object will be deleted.
-			route.SetFinalizers(remove(route.GetFinalizers(), routeFinalizer))
-		}
-	} else {
-		// Add finalizer for this CR
-		if !contains(route.GetFinalizers(), routeFinalizer) {
-			route.SetFinalizers(append(route.GetFinalizers(), routeFinalizer))
-		}
-		if err := proflow.ApplyClass("present", _route); err != nil {
-			return err
-		}
-		service := &corev1.Service{}
-		_ = r.Get(context.Background(), types.NamespacedName{Name: route.Spec.ServiceName, Namespace: route.Namespace}, service)
-		if len(service.Status.LoadBalancer.Ingress) > 0 {
-			// Set status.loadbalancer
-			route.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
-				IP: service.Status.LoadBalancer.Ingress[0].IP,
-			}}
-		}
+	err := r.patchRouteService(routePtr, servicePtr)
+	if err != nil {
+		return NewProflowRuntimeError("Failed applying metadata of Service")
 	}
+	err = r.patchServiceLoadBalancer(routePtr, servicePtr)
+	if err != nil {
+		return NewProflowRuntimeError("Failed applying Service for type loadbalancer")
+	}
+
 	return nil
 }
 
-func (r *RouteReconciler) loadbalancerPresent(apis ...interface{}) error {
-	route, _ := apis[0].(*routerv1beta1.Route)
-	service, _ := apis[1].(*corev1.Service)
+func (r *RouteReconciler) loadbalancerAbsent(apis ...interface{}) error {
+	routePtr, _ := apis[0].(*routerv1beta1.Route)
+	servicePtr, _ := apis[1].(*corev1.Service)
 
-	err := r.patchRouteService(route, service)
+	err := r.revokeRouteService(routePtr, servicePtr)
 	if err != nil {
-		return NewProflowRuntimeError("Failed updating metadata of Service")
+		return NewProflowRuntimeError("Failed revoking metadata of Service")
 	}
-	err = r.patchServiceLoadBalancer(route, service)
+	err = r.revokeServiceLoadbalancer(routePtr, servicePtr)
 	if err != nil {
-		return NewProflowRuntimeError("Failed patching Service for type loadbalancer")
+		return NewProflowRuntimeError("Failed revoking Service for type loadbalancer")
 	}
 
 	return nil
@@ -218,6 +255,17 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 	err = nil
 
+	// Setup Proflow
+	proflows := map[string]*Proflow{
+		"ingress":      {Name: "Ingress"},
+		"loadbalancer": {Name: "Loadbalancer"},
+	}
+	proflows["loadbalancer"].
+		Init(r.loadbalancerClass, r.routeFinalizeCondition).
+		SetAPI(&route).
+		SetState("present", r.loadbalancerPresent).
+		SetState("absent", r.loadbalancerAbsent)
+
 	// Determine Spec.Type
 	switch route.Spec.Type {
 	case routerv1beta1.RouteTypeIngress:
@@ -226,13 +274,7 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	case routerv1beta1.RouteTypeLoadbalancer:
 		{
-			err = new(Proflow).
-				InitClass(r.loadbalancerClass).
-				InitCondition(r.routeFinalizeCondition).
-				SetState("present", r.loadbalancerPresent).
-				// TODO
-				// SetState("absent", nil).
-				Apply(&route)
+			err = proflows["loadbalancer"].Apply()
 		}
 	default:
 		{
@@ -254,7 +296,10 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			LastTransitionTime: &metav1.Time{Time: time.Now()},
 		})
 	}
-	_ = r.Status().Update(context.Background(), &route)
+
+	routeDup := route
+	r.Status().Update(context.Background(), &route)
+	r.Update(context.Background(), &routeDup)
 
 	return ctrl.Result{}, nil
 }
