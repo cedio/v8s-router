@@ -36,6 +36,12 @@ type Proflow struct {
 	class     Class
 }
 
+var (
+	EmptyClass     Class     = func(State, ...interface{}) error { return nil }
+	EmptyCondition Condition = func(*Proflow, ...interface{}) error { return nil }
+	EmptyState     State     = func(...interface{}) error { return nil }
+)
+
 func (p *Proflow) InitClass(class Class) *Proflow {
 	p.class = class
 	return p

@@ -40,16 +40,14 @@ spec:
               description: If routeType="loadbalancer", configuration of loadbalancer
                 will be applied
               properties:
-                backend:
-                  description: 'Mode of Voyager ingress backend Supported: tcp/http'
+                class:
+                  description: 'Ingress Controller class for provisioning ingress
+                    Supported: haproxy/nginx'
                   type: string
                 host:
                   description: Hostname of Ingress typed Route Automatically generated
                     as <service-name>-<namespace-name>.<cluster-domain> if not supplied
                   type: string
-                port:
-                  description: Port for http or tcp, optional for http
-                  type: integer
                 servicePort:
                   anyOf:
                   - type: integer
@@ -61,15 +59,28 @@ spec:
                 tls:
                   description: TLS configuration for Ingress
                   properties:
-                    secretName:
-                      description: Name of Secret for SSL certificate used to perform
-                        TLS encryption
+                    backendCACertificate:
+                      description: TLS Termination Reencryption backend validating
+                        CA Certificate
+                      type: string
+                    certificate:
+                      description: Certificate chain
+                      type: string
+                    key:
+                      description: PEM format key file
+                      type: string
+                    sslRedirect:
+                      description: ::80 -> ::443
+                      type: boolean
+                    termination:
+                      description: 'Type for TLS Termination to be applied Supported:
+                        passthrough/edge/reencrypt'
                       type: string
                   required:
-                  - secretName
+                  - termination
                   type: object
               required:
-              - backend
+              - class
               - servicePort
               type: object
             loadbalancer:

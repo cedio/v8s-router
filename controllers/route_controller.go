@@ -18,10 +18,12 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	netv1beta1 "k8s.io/api/networking/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,11 +43,30 @@ type RouteReconciler struct {
 	Scheme *runtime.Scheme
 }
 
+// Service constants
 const (
-	addressPoolAnnotationField  = "metallb.universe.tf/address-pool"
-	serviceLastManagedTimeField = "router.v8s.cedio.dev/last-managed-time"
-	serviceManagedByField       = "router.v8s.cedio.dev/managed-by"
-	routeFinalizer              = "finalizer.router.v8s.cedio.dev"
+	addressPoolAnnotationField = "metallb.universe.tf/address-pool"
+)
+
+// Route constants
+const (
+	routeFinalizer       = "finalizer.router.v8s.cedio.dev"
+	lastManagedTimeField = "router.v8s.cedio.dev/last-managed-time"
+	managedByField       = "router.v8s.cedio.dev/managed-by"
+)
+
+// HAProxy Ingress constants
+const (
+	haproxyClassField          = "haproxy.org/ingress.class"
+	haproxyServerSSLField      = "haproxy.org/server-ssl"
+	haproxySSLRedirectField    = "haproxy.org/ssl-redirect"
+	haproxySSLPassthroughField = "haproxy.org/ssl-passthrough"
+)
+
+// Pass from Helm Chart during installation
+var (
+	// Cluster domain for generating default host i.e. <service name>-<namespace name>.<cluster-domain>
+	clusterDomain = "v8s.lab"
 )
 
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -75,20 +96,18 @@ func (r *RouteReconciler) appendStatusDenied(routePtr *routerv1beta1.Route, mess
 
 // patchRouteService updates Route related Service with timestamp as touched
 func (r *RouteReconciler) patchRouteService(routePtr *routerv1beta1.Route, servicePtr *corev1.Service) error {
-	annotations := map[string]string{
-		serviceLastManagedTimeField: time.Now().UTC().Format(time.RFC3339),
-		serviceManagedByField:       routePtr.Name,
+	if servicePtr.ObjectMeta.Annotations == nil {
+		servicePtr.ObjectMeta.Annotations = map[string]string{}
 	}
-	for k, v := range servicePtr.ObjectMeta.Annotations {
-		annotations[k] = v
-	}
-	servicePtr.ObjectMeta.Annotations = annotations
+	servicePtr.ObjectMeta.Annotations[lastManagedTimeField] = time.Now().UTC().Format(time.RFC3339)
+	servicePtr.ObjectMeta.Annotations[managedByField] = routePtr.Name
+
 	return nil
 }
 
 func (r *RouteReconciler) revokeRouteService(routePtr *routerv1beta1.Route, servicePtr *corev1.Service) error {
-	delete(servicePtr.ObjectMeta.Annotations, serviceLastManagedTimeField)
-	delete(servicePtr.ObjectMeta.Annotations, serviceManagedByField)
+	delete(servicePtr.ObjectMeta.Annotations, lastManagedTimeField)
+	delete(servicePtr.ObjectMeta.Annotations, managedByField)
 
 	return nil
 }
@@ -120,13 +139,13 @@ func (r *RouteReconciler) getRouteFromService(req ctrl.Request, routePtr *router
 	if err != nil {
 		return false
 	}
-	if _, ok := servicePtr.Annotations[serviceManagedByField]; !ok {
+	if _, ok := servicePtr.Annotations[managedByField]; !ok {
 		return false
 	}
 	err = r.Get(
 		context.Background(),
 		types.NamespacedName{
-			Name:      servicePtr.Annotations[serviceManagedByField],
+			Name:      servicePtr.Annotations[managedByField],
 			Namespace: req.Namespace,
 		},
 		routePtr,
@@ -160,20 +179,160 @@ func (r *RouteReconciler) routeFinalizeCondition(proflow *Proflow, apis ...inter
 		if err := proflow.ApplyClass("present"); err != nil {
 			return err
 		}
-		service := &corev1.Service{}
-		_ = r.Get(context.Background(), types.NamespacedName{Name: routePtr.Spec.ServiceName, Namespace: routePtr.Namespace}, service)
-		if len(service.Status.LoadBalancer.Ingress) > 0 {
-			// Set status.loadbalancer
-			routePtr.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
-				IP: service.Status.LoadBalancer.Ingress[0].IP,
-			}}
-		}
 	}
 	return nil
 }
 
+func (r *RouteReconciler) getIngress(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
+	return r.Get(
+		context.Background(),
+		types.NamespacedName{
+			Name:      fmt.Sprintf("%s-ingress", routePtr.Name),
+			Namespace: routePtr.Namespace,
+		},
+		ingressPtr,
+	)
+}
+
 func (r *RouteReconciler) ingressClass(state State, apis ...interface{}) error {
-	//routePtr, _ := apis[0].(*routerv1beta1.Route)
+	routePtr, _ := apis[0].(*routerv1beta1.Route)
+
+	ingress := netv1beta1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{},
+			Labels:      map[string]string{},
+		},
+		Spec: netv1beta1.IngressSpec{
+			Rules: []netv1beta1.IngressRule{{
+				IngressRuleValue: netv1beta1.IngressRuleValue{
+					HTTP: &netv1beta1.HTTPIngressRuleValue{
+						Paths: []netv1beta1.HTTPIngressPath{{}},
+					},
+				},
+			}},
+		},
+	}
+
+	ingressErr := r.getIngress(routePtr, &ingress)
+	if ingressErr != nil && !errors.IsNotFound(ingressErr) {
+		return NewProflowRuntimeError("Error in getting related Ingress")
+	}
+
+	voidFlag := false
+	err := state(routePtr, &ingress, &voidFlag)
+	if err != nil {
+		return err
+	}
+
+	if voidFlag {
+		if errors.IsNotFound(ingressErr) {
+			return nil
+		}
+		err = r.Delete(context.Background(), &ingress)
+		if err != nil {
+			return NewProflowRuntimeError("Failed deleting Ingress")
+		}
+	}
+
+	if errors.IsNotFound(ingressErr) {
+		err = r.Create(context.Background(), &ingress)
+		if err != nil {
+			return NewProflowRuntimeError("Failed creating Ingress")
+		}
+	} else {
+		err = r.Update(context.Background(), &ingress)
+		if err != nil {
+			return NewProflowRuntimeError("Failed updating Ingress")
+		}
+	}
+
+	port := 80
+	if routePtr.Spec.Ingress.TLS != nil {
+		port = 443
+	}
+	r.getIngress(routePtr, &ingress)
+	routePtr.Status.Ingress = []routerv1beta1.RouteIngress{{
+		Host: ingress.Spec.Rules[0].Host,
+		Port: &port,
+	}}
+
+	return nil
+}
+
+func (r *RouteReconciler) patchIngressClassNginx(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
+	return NewProflowRuntimeError("Work in progress for spec.ingress.class='nginx'")
+}
+
+func (r *RouteReconciler) patchIngressClassHAProxy(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
+	ingressPtr.ObjectMeta.Annotations[haproxyClassField] = "haproxy"
+
+	// No TLS
+	if routePtr.Spec.Ingress.TLS == nil {
+		ingressPtr.ObjectMeta.Annotations[haproxyServerSSLField] = "false"
+		ingressPtr.ObjectMeta.Annotations[haproxySSLRedirectField] = "false"
+		return nil
+	}
+
+	// With TLS
+	switch routePtr.Spec.Ingress.TLS.Termination {
+	case routerv1beta1.TLSTerminationPassthrough:
+		{
+			ingressPtr.ObjectMeta.Annotations[haproxySSLPassthroughField] = "true"
+		}
+	case routerv1beta1.TLSTerminationEdge:
+		{
+
+		}
+	case routerv1beta1.TLSTerminationReencrypt:
+		{
+
+		}
+	}
+
+	return nil
+}
+
+func (r *RouteReconciler) ingressPresent(apis ...interface{}) error {
+	routePtr, _ := apis[0].(*routerv1beta1.Route)
+	ingressPtr, _ := apis[1].(*netv1beta1.Ingress)
+
+	host := fmt.Sprintf("%s-%s.%s", routePtr.Spec.ServiceName, routePtr.Namespace, clusterDomain)
+	if routePtr.Spec.Ingress.Host != "" {
+		host = routePtr.Spec.Ingress.Host
+	}
+
+	ingressPtr.ObjectMeta.Name = fmt.Sprintf("%s-ingress", routePtr.Name)
+	ingressPtr.ObjectMeta.Namespace = routePtr.Namespace
+	ingressPtr.ObjectMeta.Annotations[lastManagedTimeField] = time.Now().UTC().Format(time.RFC3339)
+	ingressPtr.ObjectMeta.Annotations[managedByField] = routePtr.Name
+
+	ingressPtr.Spec.Rules[0].Host = host
+	ingressPtr.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Path = "/"
+	ingressPtr.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.ServiceName = routePtr.Spec.ServiceName
+	ingressPtr.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.ServicePort = routePtr.Spec.Ingress.ServicePort
+
+	patcher := r.patchIngressClassHAProxy
+
+	switch routePtr.Spec.Ingress.Class {
+	case routerv1beta1.IngressClassHAProxy:
+		patcher = r.patchIngressClassHAProxy
+	case routerv1beta1.IngressClassNginx:
+		patcher = r.patchIngressClassNginx
+	default:
+		return NewProflowRuntimeError("Not supported spec.ingress.class from [nginx, haproxy]")
+	}
+
+	err := patcher(routePtr, ingressPtr)
+	if err != nil {
+		return NewProflowRuntimeError("Error in patching typed Ingress")
+	}
+
+	return nil
+}
+
+func (r *RouteReconciler) ingressAbsent(apis ...interface{}) error {
+	voidFlagPtr, _ := apis[2].(*bool)
+	*voidFlagPtr = true
 	return nil
 }
 
@@ -190,12 +349,22 @@ func (r *RouteReconciler) loadbalancerClass(state State, apis ...interface{}) er
 	}
 	err = state(routePtr, &service)
 	if err != nil {
-		return NewProflowRuntimeError("Error occurs in changing state of API objects")
+		return err
 	}
+
 	err = r.Update(context.Background(), &service)
 	if err != nil {
 		return NewProflowRuntimeError("Failed updating Service")
 	}
+
+	r.Get(context.Background(), types.NamespacedName{Name: routePtr.Spec.ServiceName, Namespace: routePtr.Namespace}, &service)
+	if len(service.Status.LoadBalancer.Ingress) > 0 {
+		// Set status.loadbalancer
+		routePtr.Status.Loadbalancer = []routerv1beta1.RouteLoadbalancer{{
+			IP: service.Status.LoadBalancer.Ingress[0].IP,
+		}}
+	}
+
 	return nil
 }
 
@@ -260,17 +429,24 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		"ingress":      {Name: "Ingress"},
 		"loadbalancer": {Name: "Loadbalancer"},
 	}
+
 	proflows["loadbalancer"].
 		Init(r.loadbalancerClass, r.routeFinalizeCondition).
 		SetAPI(&route).
 		SetState("present", r.loadbalancerPresent).
 		SetState("absent", r.loadbalancerAbsent)
 
+	proflows["ingress"].
+		Init(r.ingressClass, r.routeFinalizeCondition).
+		SetAPI(&route).
+		SetState("present", r.ingressPresent).
+		SetState("absent", r.ingressAbsent)
+
 	// Determine Spec.Type
 	switch route.Spec.Type {
 	case routerv1beta1.RouteTypeIngress:
 		{
-
+			err = proflows["ingress"].Apply()
 		}
 	case routerv1beta1.RouteTypeLoadbalancer:
 		{
@@ -278,7 +454,7 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		}
 	default:
 		{
-			err = NewProflowRuntimeError("Supported spec.type: ['ingress', 'loadbalancer']")
+			err = NewProflowRuntimeError("Not supported spec.type from [ingress, loadbalancer]")
 		}
 	}
 

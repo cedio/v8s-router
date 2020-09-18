@@ -72,44 +72,67 @@ const (
 
 // IngressConfig defines config for route backed using Voyager ingress
 type IngressConfig struct {
-	// Mode of Voyager ingress backend
-	// Supported: tcp/http
-	Backend IngressBackendType `json:"backend" protobuf:"bytes,1,opt,name=backend,casttype=IngressBackendType"`
+	// Ingress Controller class for provisioning ingress
+	// Supported: haproxy/nginx
+	Class IngressClassType `json:"class" protobuf:"bytes,1,opt,name=class,casttype=IngressClassType"`
 
 	// Hostname of Ingress typed Route
 	// Automatically generated as <service-name>-<namespace-name>.<cluster-domain> if not supplied
 	// +optional
 	Host string `json:"host,omitempty" protobuf:"bytes,2,opt,name=host"`
 
-	// Port for http or tcp, optional for http
-	// +optional
-	Port *int `json:"port,omitempty" protobuf:"varint,3,opt,name=port"`
-
 	// The target port on pods selected by the service this route points to.
 	// If this is a string, it will be looked up as a named port in the target
 	// endpoints port list.
-	ServicePort intstr.IntOrString `json:"servicePort" protobuf:"bytes,4,opt,name=servicePort"`
+	ServicePort intstr.IntOrString `json:"servicePort" protobuf:"bytes,3,opt,name=servicePort"`
 
 	// TLS configuration for Ingress
 	// +optional
-	TLS *IngressTLSConfig `json:"tls,omitempty" protobuf:"bytes,5,opt,name=tls"`
+	TLS *IngressTLSConfig `json:"tls,omitempty" protobuf:"bytes,4,opt,name=tls"`
 }
+
+// IngressClassType defines which type of ingress controller used
+type IngressClassType string
+
+const (
+	// IngressClassHAProxy means HAProxy
+	IngressClassHAProxy IngressClassType = "haproxy"
+
+	// IngressClassNginx means Nginx
+	IngressClassNginx IngressClassType = "nginx"
+)
 
 // IngressTLSConfig defines the TLS encryption method for ingress typed Route
 type IngressTLSConfig struct {
-	// Name of Secret for SSL certificate used to perform TLS encryption
-	SecretName string `json:"secretName" protobuf:"bytes,1,opt,name=secretName"`
+	// Type for TLS Termination to be applied
+	// Supported: passthrough/edge/reencrypt
+	Termination TLSTerminationType `json:"termination" protobuf:"bytes,1,opt,name=termination,casttype=TLSTerminationType"`
+
+	// PEM format key file
+	Key string `json:"key,omitempty" protobuf:"bytes,2,opt,name=key"`
+
+	// Certificate chain
+	Certificate string `json:"certificate,omitempty" protobuf:"bytes,3,opt,name=certificate"`
+
+	// TLS Termination Reencryption backend validating CA Certificate
+	BackendCACertificate string `json:"backendCACertificate,omitempty" protobuf:"bytes,4,opt,name=backendCACertificate"`
+
+	// ::80 -> ::443
+	SSLRedirect bool `json:"sslRedirect,omitempty" protobuf:"varint,5,opt,name=sslRedirect"`
 }
 
-// IngressBackendType indicates which ingress backend is used
-type IngressBackendType string
+// TLSTerminationType defines type for TLS Termination to be applied
+type TLSTerminationType string
 
 const (
-	// IngressBackendHTTP shows http is used
-	IngressBackendHTTP IngressBackendType = "http"
+	// TLSTerminationEdge indicates TLS termination, same certificate for both frontend and backend
+	TLSTerminationEdge TLSTerminationType = "edge"
 
-	// IngressBackendTCP shows tcp is used
-	IngressBackendTCP IngressBackendType = "tcp"
+	// TLSTerminationPassthrough indicates passthrough using L4 traffic
+	TLSTerminationPassthrough TLSTerminationType = "passthrough"
+
+	// TLSTerminationReencrypt indicates TLS termination, different certificate for frontend and backend
+	TLSTerminationReencrypt TLSTerminationType = "reencrypt"
 )
 
 // RouteStatus defines the observed state of Route
