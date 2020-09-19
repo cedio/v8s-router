@@ -60,14 +60,8 @@ spec:
                   description: TLS configuration for Ingress
                   properties:
                     backendCACertificate:
-                      description: TLS Termination Reencryption backend validating
-                        CA Certificate
-                      type: string
-                    certificate:
-                      description: Certificate chain
-                      type: string
-                    key:
-                      description: PEM format key file
+                      description: 'TODO: TLS Termination Reencryption backend validating
+                        CA Certificate'
                       type: string
                     sslRedirect:
                       description: ::80 -> ::443
@@ -75,6 +69,9 @@ spec:
                     termination:
                       description: 'Type for TLS Termination to be applied Supported:
                         passthrough/edge/reencrypt'
+                      type: string
+                    tlsSecretName:
+                      description: Secret Name containing tls certificates
                       type: string
                   required:
                   - termination

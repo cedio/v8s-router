@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -279,13 +280,17 @@ func (r *RouteReconciler) patchIngressClassHAProxy(routePtr *routerv1beta1.Route
 		{
 			ingressPtr.ObjectMeta.Annotations[haproxySSLPassthroughField] = "true"
 		}
-	case routerv1beta1.TLSTerminationEdge:
+	case routerv1beta1.TLSTerminationEdge, routerv1beta1.TLSTerminationReencrypt:
 		{
+			ingressPtr.Spec.TLS = []netv1beta1.IngressTLS{{
+				Hosts:      []string{ingressPtr.Spec.Rules[0].Host},
+				SecretName: routePtr.Spec.Ingress.TLS.TLSSecretName,
+			}}
+			ingressPtr.ObjectMeta.Annotations[haproxySSLRedirectField] = strconv.FormatBool(routePtr.Spec.Ingress.TLS.SSLRedirect)
 
-		}
-	case routerv1beta1.TLSTerminationReencrypt:
-		{
-
+			if routePtr.Spec.Ingress.TLS.Termination == routerv1beta1.TLSTerminationReencrypt {
+				ingressPtr.ObjectMeta.Annotations[haproxyServerSSLField] = "true"
+			}
 		}
 	}
 

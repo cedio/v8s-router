@@ -108,17 +108,14 @@ type IngressTLSConfig struct {
 	// Supported: passthrough/edge/reencrypt
 	Termination TLSTerminationType `json:"termination" protobuf:"bytes,1,opt,name=termination,casttype=TLSTerminationType"`
 
-	// PEM format key file
-	Key string `json:"key,omitempty" protobuf:"bytes,2,opt,name=key"`
+	// Secret Name containing tls certificates
+	TLSSecretName string `json:"tlsSecretName,omitempty" protobuf:"bytes,2,opt,name=tlsSecretName"`
 
-	// Certificate chain
-	Certificate string `json:"certificate,omitempty" protobuf:"bytes,3,opt,name=certificate"`
-
-	// TLS Termination Reencryption backend validating CA Certificate
-	BackendCACertificate string `json:"backendCACertificate,omitempty" protobuf:"bytes,4,opt,name=backendCACertificate"`
+	// TODO: TLS Termination Reencryption backend validating CA Certificate
+	BackendCACertificate string `json:"backendCACertificate,omitempty" protobuf:"bytes,3,opt,name=backendCACertificate"`
 
 	// ::80 -> ::443
-	SSLRedirect bool `json:"sslRedirect,omitempty" protobuf:"varint,5,opt,name=sslRedirect"`
+	SSLRedirect bool `json:"sslRedirect,omitempty" protobuf:"varint,4,opt,name=sslRedirect"`
 }
 
 // TLSTerminationType defines type for TLS Termination to be applied
