@@ -111,8 +111,8 @@ type IngressTLSConfig struct {
 	// Secret Name containing tls certificates
 	TLSSecretName string `json:"tlsSecretName,omitempty" protobuf:"bytes,2,opt,name=tlsSecretName"`
 
-	// TODO: TLS Termination Reencryption backend validating CA Certificate
-	BackendCACertificate string `json:"backendCACertificate,omitempty" protobuf:"bytes,3,opt,name=backendCACertificate"`
+	// [Incompatible for HAProxy/Nginx] TLS Termination Reencryption backend validating CA Certificate
+	BackendCASecretName string `json:"backendCASecretName,omitempty" protobuf:"bytes,3,opt,name=backendCASecretName"`
 
 	// ::80 -> ::443
 	SSLRedirect bool `json:"sslRedirect,omitempty" protobuf:"varint,4,opt,name=sslRedirect"`

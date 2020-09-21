@@ -59,9 +59,9 @@ spec:
                 tls:
                   description: TLS configuration for Ingress
                   properties:
-                    backendCACertificate:
-                      description: 'TODO: TLS Termination Reencryption backend validating
-                        CA Certificate'
+                    backendCASecretName:
+                      description: '[Incompatible for HAProxy/Nginx] TLS Termination
+                        Reencryption backend validating CA Certificate'
                       type: string
                     sslRedirect:
                       description: ::80 -> ::443

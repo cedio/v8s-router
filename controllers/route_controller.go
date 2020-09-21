@@ -56,6 +56,14 @@ const (
 	managedByField       = "router.v8s.cedio.dev/managed-by"
 )
 
+// Nginx Ingress constants
+const (
+	nginxClassField           = "kubernetes.io/ingress.class"
+	nginxSSLRedirectField     = "nginx.ingress.kubernetes.io/ssl-redirect"
+	nginxSSLPassthroughField  = "nginx.ingress.kubernetes.io/ssl-passthrough"
+	nginxBackendProtocolField = "nginx.ingress.kubernetes.io/backend-protocol"
+)
+
 // HAProxy Ingress constants
 const (
 	haproxyClassField          = "haproxy.org/ingress.class"
@@ -66,8 +74,14 @@ const (
 
 // Pass from Helm Chart during installation
 var (
-	// Cluster domain for generating default host i.e. <service name>-<namespace name>.<cluster-domain>
+	// Cluster domain for generating default host i.e. <service name>-<namespace name>.<subdomain>.<cluster-domain>
 	clusterDomain = "v8s.lab"
+
+	// HAProxy typed subdomain
+	haproxySubDomain = "apps1"
+
+	// Nginx typed subdomain
+	nginxSubDomain = "apps2"
 )
 
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -260,12 +274,54 @@ func (r *RouteReconciler) ingressClass(state State, apis ...interface{}) error {
 	return nil
 }
 
+func (r *RouteReconciler) generateHostName(routePtr *routerv1beta1.Route, subdomain string) string {
+	if routePtr.Spec.Ingress.Host != "" {
+		return routePtr.Spec.Ingress.Host
+	}
+	return fmt.Sprintf("%s-%s.%s.%s", routePtr.Spec.ServiceName, routePtr.Namespace, subdomain, clusterDomain)
+}
+
 func (r *RouteReconciler) patchIngressClassNginx(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
-	return NewProflowRuntimeError("Work in progress for spec.ingress.class='nginx'")
+	ingressPtr.ObjectMeta.Annotations[nginxClassField] = "nginx"
+
+	// Set hostname
+	ingressPtr.Spec.Rules[0].Host = r.generateHostName(routePtr, nginxSubDomain)
+
+	// No TLS
+	if routePtr.Spec.Ingress.TLS == nil {
+		ingressPtr.ObjectMeta.Annotations[nginxSSLRedirectField] = "false"
+		return nil
+	}
+
+	// With TLS
+	switch routePtr.Spec.Ingress.TLS.Termination {
+	case routerv1beta1.TLSTerminationPassthrough:
+		{
+			ingressPtr.ObjectMeta.Annotations[nginxSSLPassthroughField] = "true"
+			ingressPtr.ObjectMeta.Annotations[nginxBackendProtocolField] = "HTTPS"
+		}
+	case routerv1beta1.TLSTerminationEdge, routerv1beta1.TLSTerminationReencrypt:
+		{
+			ingressPtr.Spec.TLS = []netv1beta1.IngressTLS{{
+				Hosts:      []string{ingressPtr.Spec.Rules[0].Host},
+				SecretName: routePtr.Spec.Ingress.TLS.TLSSecretName,
+			}}
+			ingressPtr.ObjectMeta.Annotations[nginxSSLRedirectField] = strconv.FormatBool(routePtr.Spec.Ingress.TLS.SSLRedirect)
+
+			if routePtr.Spec.Ingress.TLS.Termination == routerv1beta1.TLSTerminationReencrypt {
+				ingressPtr.ObjectMeta.Annotations[nginxBackendProtocolField] = "HTTPS"
+			}
+		}
+	}
+
+	return nil
 }
 
 func (r *RouteReconciler) patchIngressClassHAProxy(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
 	ingressPtr.ObjectMeta.Annotations[haproxyClassField] = "haproxy"
+
+	// Set hostname
+	ingressPtr.Spec.Rules[0].Host = r.generateHostName(routePtr, haproxySubDomain)
 
 	// No TLS
 	if routePtr.Spec.Ingress.TLS == nil {
@@ -301,17 +357,11 @@ func (r *RouteReconciler) ingressPresent(apis ...interface{}) error {
 	routePtr, _ := apis[0].(*routerv1beta1.Route)
 	ingressPtr, _ := apis[1].(*netv1beta1.Ingress)
 
-	host := fmt.Sprintf("%s-%s.%s", routePtr.Spec.ServiceName, routePtr.Namespace, clusterDomain)
-	if routePtr.Spec.Ingress.Host != "" {
-		host = routePtr.Spec.Ingress.Host
-	}
-
 	ingressPtr.ObjectMeta.Name = fmt.Sprintf("%s-ingress", routePtr.Name)
 	ingressPtr.ObjectMeta.Namespace = routePtr.Namespace
 	ingressPtr.ObjectMeta.Annotations[lastManagedTimeField] = time.Now().UTC().Format(time.RFC3339)
 	ingressPtr.ObjectMeta.Annotations[managedByField] = routePtr.Name
 
-	ingressPtr.Spec.Rules[0].Host = host
 	ingressPtr.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Path = "/"
 	ingressPtr.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.ServiceName = routePtr.Spec.ServiceName
 	ingressPtr.Spec.Rules[0].IngressRuleValue.HTTP.Paths[0].Backend.ServicePort = routePtr.Spec.Ingress.ServicePort
