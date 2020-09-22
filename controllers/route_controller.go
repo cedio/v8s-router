@@ -171,31 +171,59 @@ func (r *RouteReconciler) getRouteFromService(req ctrl.Request, routePtr *router
 	return true
 }
 
-func (r *RouteReconciler) routeFinalizeCondition(proflow *Proflow, apis ...interface{}) error {
-	routePtr, _ := apis[0].(*routerv1beta1.Route)
+func (r *RouteReconciler) resetRouteStatus(routePtr *routerv1beta1.Route) {
+	routePtr.Status = routerv1beta1.RouteStatus{Conditions: []routerv1beta1.RouteCondition{}}
+}
 
-	if routePtr.GetDeletionTimestamp() != nil {
-		if contains(routePtr.GetFinalizers(), routeFinalizer) {
-			// Run finalization logic. If the
-			// finalization logic fails, don't remove the finalizer so
-			// that we can retry during the next reconciliation.
-			if err := proflow.ApplyClass("absent"); err != nil {
+func (r *RouteReconciler) routeFinalizeCondition(proflows map[string]*Proflow, reqLogger logr.Logger) Condition {
+	return func(proflow *Proflow, apis ...interface{}) error {
+		routePtr, _ := apis[0].(*routerv1beta1.Route)
+
+		if routePtr.GetDeletionTimestamp() != nil {
+			r.resetRouteStatus(routePtr)
+			if contains(routePtr.GetFinalizers(), routeFinalizer) {
+				// Run finalization logic. If the
+				// finalization logic fails, don't remove the finalizer so
+				// that we can retry during the next reconciliation.
+				if err := proflow.ApplyClass("absent"); err != nil {
+					return err
+				}
+				// Remove finalizer. Once all finalizers have been
+				// removed, the object will be deleted.
+				routePtr.SetFinalizers(remove(routePtr.GetFinalizers(), routeFinalizer))
+
+				reqLogger.Info("Deleted")
+			}
+		} else {
+			// Add finalizer for this CR
+			if !contains(routePtr.GetFinalizers(), routeFinalizer) {
+				routePtr.SetFinalizers(append(routePtr.GetFinalizers(), routeFinalizer))
+			}
+
+			// Deprovision current class
+			currentClass := ""
+			if routePtr.Status.Ingress != nil && len(routePtr.Status.Ingress) > 0 {
+				currentClass = "ingress"
+			} else if routePtr.Status.Loadbalancer != nil && len(routePtr.Status.Loadbalancer) > 0 {
+				currentClass = "loadbalancer"
+			}
+
+			if currentClass != "" && currentClass != string(routePtr.Spec.Type) {
+				reqLogger.Info(fmt.Sprintf("Changing class from %s to %s", currentClass, string(routePtr.Spec.Type)))
+				if err := proflows[currentClass].ApplyClass("absent"); err != nil {
+					return err
+				}
+			}
+			r.resetRouteStatus(routePtr)
+
+			if err := proflow.ApplyClass("present"); err != nil {
 				return err
 			}
-			// Remove finalizer. Once all finalizers have been
-			// removed, the object will be deleted.
-			routePtr.SetFinalizers(remove(routePtr.GetFinalizers(), routeFinalizer))
+
+			reqLogger.Info("Updated")
 		}
-	} else {
-		// Add finalizer for this CR
-		if !contains(routePtr.GetFinalizers(), routeFinalizer) {
-			routePtr.SetFinalizers(append(routePtr.GetFinalizers(), routeFinalizer))
-		}
-		if err := proflow.ApplyClass("present"); err != nil {
-			return err
-		}
+		return nil
 	}
-	return nil
 }
 
 func (r *RouteReconciler) getIngress(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
@@ -471,12 +499,8 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 			return ctrl.Result{}, err
 		}
 	}
-	reqLogger.Info("Accepted")
 
-	// Reset Route Status
-	route.Status = routerv1beta1.RouteStatus{
-		Conditions: []routerv1beta1.RouteCondition{},
-	}
+	reqLogger.Info("Accepted")
 	err = nil
 
 	// Setup Proflow
@@ -486,13 +510,13 @@ func (r *RouteReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 
 	proflows["loadbalancer"].
-		Init(r.loadbalancerClass, r.routeFinalizeCondition).
+		Init(r.loadbalancerClass, r.routeFinalizeCondition(proflows, reqLogger)).
 		SetAPI(&route).
 		SetState("present", r.loadbalancerPresent).
 		SetState("absent", r.loadbalancerAbsent)
 
 	proflows["ingress"].
-		Init(r.ingressClass, r.routeFinalizeCondition).
+		Init(r.ingressClass, r.routeFinalizeCondition(proflows, reqLogger)).
 		SetAPI(&route).
 		SetState("present", r.ingressPresent).
 		SetState("absent", r.ingressAbsent)
