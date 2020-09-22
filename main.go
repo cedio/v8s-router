@@ -47,10 +47,17 @@ func init() {
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
+	var clusterDomain string
+	var haproxySubDomain string
+	var nginxSubDomain string
+
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&clusterDomain, "cluster-domain", "v8s.lab", "Cluster domain following RFC952")
+	flag.StringVar(&haproxySubDomain, "haproxy-subdomain", "apps1", "HAProxy subdomain involved in generating default hostname in Route")
+	flag.StringVar(&nginxSubDomain, "nginx-domain", "apps2", "Nginx subdomain involved in generating default hostname in Route")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -71,6 +78,13 @@ func main() {
 		Client: mgr.GetClient(),
 		Log:    ctrl.Log.WithName("controllers").WithName("Route"),
 		Scheme: mgr.GetScheme(),
+		Payload: controllers.ArgsPayload{
+			ClusterDomain: clusterDomain,
+			SubDomain: map[string]string{
+				"nginx":   nginxSubDomain,
+				"haproxy": haproxySubDomain,
+			},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Route")
 		os.Exit(1)

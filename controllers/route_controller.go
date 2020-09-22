@@ -37,11 +37,18 @@ import (
 	routerv1beta1 "v8s-router/api/v1beta1"
 )
 
+// ArgsPayload stores payload received from main.go
+type ArgsPayload struct {
+	ClusterDomain string
+	SubDomain     map[string]string
+}
+
 // RouteReconciler reconciles a Route object
 type RouteReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
+	Log     logr.Logger
+	Scheme  *runtime.Scheme
+	Payload ArgsPayload
 }
 
 // Service constants
@@ -70,18 +77,6 @@ const (
 	haproxyServerSSLField      = "haproxy.org/server-ssl"
 	haproxySSLRedirectField    = "haproxy.org/ssl-redirect"
 	haproxySSLPassthroughField = "haproxy.org/ssl-passthrough"
-)
-
-// Pass from Helm Chart during installation
-var (
-	// Cluster domain for generating default host i.e. <service name>-<namespace name>.<subdomain>.<cluster-domain>
-	clusterDomain = "v8s.lab"
-
-	// HAProxy typed subdomain
-	haproxySubDomain = "apps1"
-
-	// Nginx typed subdomain
-	nginxSubDomain = "apps2"
 )
 
 // +kubebuilder:rbac:groups=router.v8s.cedio.dev,resources=routes,verbs=get;list;watch;create;update;patch;delete
@@ -306,14 +301,14 @@ func (r *RouteReconciler) generateHostName(routePtr *routerv1beta1.Route, subdom
 	if routePtr.Spec.Ingress.Host != "" {
 		return routePtr.Spec.Ingress.Host
 	}
-	return fmt.Sprintf("%s-%s.%s.%s", routePtr.Spec.ServiceName, routePtr.Namespace, subdomain, clusterDomain)
+	return fmt.Sprintf("%s-%s.%s.%s", routePtr.Spec.ServiceName, routePtr.Namespace, subdomain, r.Payload.ClusterDomain)
 }
 
 func (r *RouteReconciler) patchIngressClassNginx(routePtr *routerv1beta1.Route, ingressPtr *netv1beta1.Ingress) error {
 	ingressPtr.ObjectMeta.Annotations[nginxClassField] = "nginx"
 
 	// Set hostname
-	ingressPtr.Spec.Rules[0].Host = r.generateHostName(routePtr, nginxSubDomain)
+	ingressPtr.Spec.Rules[0].Host = r.generateHostName(routePtr, r.Payload.SubDomain["nginx"])
 
 	// No TLS
 	if routePtr.Spec.Ingress.TLS == nil {
@@ -349,7 +344,7 @@ func (r *RouteReconciler) patchIngressClassHAProxy(routePtr *routerv1beta1.Route
 	ingressPtr.ObjectMeta.Annotations[haproxyClassField] = "haproxy"
 
 	// Set hostname
-	ingressPtr.Spec.Rules[0].Host = r.generateHostName(routePtr, haproxySubDomain)
+	ingressPtr.Spec.Rules[0].Host = r.generateHostName(routePtr, r.Payload.SubDomain["haproxy"])
 
 	// No TLS
 	if routePtr.Spec.Ingress.TLS == nil {
