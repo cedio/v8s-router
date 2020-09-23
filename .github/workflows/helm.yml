@@ -1,8 +1,11 @@
 name: Release Charts
 
 on:
-  tags:
-    - v8s-router-chart-*
+  push:
+    tags: 
+      - v8s-router-chart-*
+    branches: 
+      - master
 
 jobs:
   release:
