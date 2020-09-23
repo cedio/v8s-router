@@ -2,6 +2,16 @@ apiVersion: v1
 entries:
   v8s-router:
   - apiVersion: v2
+    appVersion: 0.1.1
+    created: "2020-09-23T16:49:23.288213867Z"
+    description: v8s Router to simplify service exposing
+    digest: 05382821c930cd5ad79759e7c18bf7bd3e9cc26acfece623c92322b61a7f5c90
+    name: v8s-router
+    type: application
+    urls:
+    - https://github.com/cedio/v8s-router/releases/download/v8s-router-0.2.0/v8s-router-0.2.0.tgz
+    version: 0.2.0
+  - apiVersion: v2
     appVersion: 0.1.0
     created: "2020-09-23T16:13:20.177750868Z"
     description: v8s Router to simplify service exposing
