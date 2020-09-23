@@ -57,7 +57,7 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&clusterDomain, "cluster-domain", "v8s.lab", "Cluster domain following RFC952")
 	flag.StringVar(&haproxySubDomain, "haproxy-subdomain", "apps1", "HAProxy subdomain involved in generating default hostname in Route")
-	flag.StringVar(&nginxSubDomain, "nginx-domain", "apps2", "Nginx subdomain involved in generating default hostname in Route")
+	flag.StringVar(&nginxSubDomain, "nginx-subdomain", "apps2", "Nginx subdomain involved in generating default hostname in Route")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
