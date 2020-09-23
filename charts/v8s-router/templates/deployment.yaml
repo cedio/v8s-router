@@ -1,0 +1,88 @@
+{{- if or (eq .Values.controller.kind "Deployment") (eq .Values.controller.kind "Both") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{- include "v8s-router.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller-manager
+    {{- with .Values.controller.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  name: {{ include "v8s-router.fullname" . }}-controller-manager
+  {{- if .Values.controller.annotations }}
+  annotations: {{ toYaml .Values.controller.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "v8s-router.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller-manager
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  {{- if .Values.controller.updateStrategy }}
+  updateStrategy: {{ toYaml .Values.controller.updateStrategy | nindent 4 }}
+  {{- end }}
+  minReadySeconds: {{ .Values.controller.minReadySeconds }}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  template:
+    metadata:
+    {{- if .Values.controller.podAnnotations }}
+      annotations: {{ toYaml .Values.controller.podAnnotations | nindent 8 }}
+    {{- end }}
+      labels:
+        {{- include "v8s-router.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller-manager
+      {{- if .Values.controller.podLabels }}
+        {{- toYaml .Values.controller.podLabels | nindent 8 }}
+      {{- end }}
+    spec:
+    {{- if .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml .Values.imagePullSecrets | nindent 8 }}
+    {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - args:
+          - --secure-listen-address=0.0.0.0:8443
+          - --upstream=http://127.0.0.1:8080/
+          - --logtostderr=true
+          - --v=10
+          image: gcr.io/kubebuilder/kube-rbac-proxy:v0.5.0
+          name: kube-rbac-proxy
+          ports:
+          - containerPort: 8443
+            name: https
+        - args:
+          - --metrics-addr=127.0.0.1:8080
+          - --enable-leader-election
+        {{- range $key, $value := .Values.controller.extraArgs }}
+          {{- /* Accept keys without values or with false as value */}}
+          {{- if eq ($value | quote | len) 2 }}
+          - --{{ $key }}
+          {{- else }}
+          - --{{ $key }}={{ $value }}
+          {{- end }}
+        {{- end }}
+          command:
+          - /manager
+          {{- with .Values.controller.image }}
+          image: "{{.repository}}:{{ default $.Chart.AppVersion .tag }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+          name: manager
+        {{- if .Values.controller.resources }}
+          resources: {{ toYaml .Values.controller.resources | nindent 12 }}
+        {{- end }}
+    {{- if .Values.controller.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.controller.nodeSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.controller.tolerations }}
+      tolerations: {{ toYaml .Values.controller.tolerations | nindent 8 }}
+    {{- end }}
+    {{- if .Values.controller.affinity }}
+      affinity: {{ toYaml .Values.controller.affinity | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "v8s-router.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.controller.terminationGracePeriodSeconds }}
+{{- end }}
