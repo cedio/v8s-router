@@ -2,8 +2,6 @@ name: Release Charts
 
 on:
   push:
-    tags: 
-      - v8s-router-chart-*
     branches: 
       - master
 
