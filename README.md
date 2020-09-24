@@ -74,3 +74,41 @@ Detailed helm chart values can be found [here](https://github.com/cedio/v8s-rout
 2. Create [Release](https://github.com/cedio/v8s-router/releases) with Tag `/^controller-([0-9.]+)$/`
 
 3. [Docker Hub](https://hub.docker.com/r/cedio/v8s-router) pipeline will build and publish latest image based on tagged Release
+
+## Known Issues
+- Both HAProxy Ingress Controller and Nginx Ingress Controller hangs sometime during backend update (i.e. Ingress creation/deletion), use `kubectl rollout restart daemonsets/ingress-controller` to restart
+
+- TLS Re-encryption only supports certificate changing, but not backend certificate verification. Thus pseudo re-encryption
+
+- Blue/Green not supported
+
+## Example
+### Loadbalancer External
+```yaml
+kind: Route
+apiVersion: router.v8s.cedio.dev/v1beta1
+metadata:
+  name: nginx-route
+  namespace: route-test
+spec:
+  serviceName: nginx
+  type: loadbalancer
+  loadbalancer:
+    addressPool: external
+```
+
+### HAProxy Ingress Without TLS
+```yaml
+kind: Route
+apiVersion: router.v8s.cedio.dev/v1beta1
+metadata:
+  name: nginx-route
+  namespace: route-test
+spec:
+  serviceName: nginx
+  type: ingress
+  ingress:
+    class: haproxy
+    servicePort: 80
+    host: nginx.apps1.v8s.lab
+```
