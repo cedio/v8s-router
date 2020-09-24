@@ -2,15 +2,14 @@
 A highly available Kubernetes operator built to simplify service exposing. `Service` is a resource on Kubernetes cluster which defines policies to reach `Pod`. Although there are multiple methods (i.e. `ClusterIP`, `NodePort`, `LoadBalancer`, `ExternalName`) for exposing `Service` to external applications, technical know-how is required for familiar usage. **v8s-router** delivers `Route` as a higher level wrapper to `Service` and encapsulates those methods, while respecting [`Ingress`](https://kubernetes.io/docs/concepts/services-networking/ingress/) from the ever-growing Kubernetes community.
 
 ## Versions
-| Name                           | Version |
-|--------------------------------|---------|
-| Golang                         | 1.15.2  |
-| Operator-sdk                   | 1.0.1   |
-| Helm                           | 3.3.3   |
-| bitnami/metallb                | 0.1.21  |
-| haproxytech/kubernetes-ingress | 1.6.0   |
-| ingress-nginx/ingress-nginx    | 3.3.0   |
-| v8s-router/v8s-router          | 0.2.0   |
+| Name | Version |
+|-|-|
+| [Golang](https://golang.org/) | 1.15.2 |
+| [Operator-sdk](https://github.com/operator-framework/operator-sdk) | 1.0.1 |
+| [Helm](https://helm.sh/) | 3.3.3 |
+| [bitnami/metallb](https://bitnami.com/stack/metallb-controller/helm) | 0.1.21 |
+| [haproxytech/kubernetes-ingress](https://github.com/haproxytech/kubernetes-ingress) | 1.6.0 |
+| [ingress-nginx/ingress-nginx](https://github.com/kubernetes/ingress-nginx) | 3.3.0 |
 
 ## Development
 This project is a Kubernetes native application (Operator) running on [Operator Framework](https://sdk.operatorframework.io/).
